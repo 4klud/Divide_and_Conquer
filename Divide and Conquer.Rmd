@@ -1,0 +1,266 @@
+---
+title: "Divide and Conquer"
+author: "Claudius Taylor"
+date: "1/29/2019"
+output: pdf_document
+---
+
+```{r results='asis', echo=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+library(tidyverse)
+library(dplyr)
+library(bindrcpp)
+library(data.table) #fread
+library(pracma) #approx_entropy
+library(e1071) #NaiveBayes
+library(C50) #C5.0 Descision Tree
+library(gmodels) #CrossTable
+library(GGally) #ggpairs
+```
+
+## Useful functions
+
+```{r}
+boolean_cover <- function(df,proportion=0.75){
+#given a dataframe, return a boolean vector appropriate for selecting rows of the dataframe.
+    n=dim(df)[1] #number of rows in the dataframe
+    return(runif(n,0,1) > 1 - proportion) 
+}
+
+min_max_normalize <- function(x) {
+    return((x - min(x)) / (max(x) - min(x)))
+}
+
+discretize <- function(x){
+#amplify and round
+    round(x*10, 0)
+}
+
+entropy <- function(df) {
+    df %>%
+    filter(timestamp==x) %>%
+    summarise( ch1_entropy=tryCatch(approx_entropy(ch1,edim=2,r=0.2*sd(ch1),elag=4),
+                                    error = function(e) 0), 
+               ch2_entropy=tryCatch(approx_entropy(ch2,edim=2,r=0.2*sd(ch2),elag=4),
+                                    error = function(e) 0), 
+               ch3_entropy=tryCatch(approx_entropy(ch3,edim=2,r=0.2*sd(ch3),elag=4),
+                                    error = function(e) 0), 
+               ch4_entropy=tryCatch(approx_entropy(ch4,edim=2,r=0.2*sd(ch4),elag=4),
+                                    error = function(e) 0) 
+             )
+}
+
+preprocess <- function(df) {
+#given raw eeg data return a dataframe with normalized/discrete entropy values for each channel
+    entropy(df) %>% 
+    select(matches('ch')) %>% 
+    apply(2, min_max_normalize) %>% 
+    apply(2, discretize) %>% 
+    as.data.frame()
+}
+
+read_eeg <- function(path){
+#read a file with no header and give it specific column names
+    column_names <- c('timestamp','ch1','ch2','ch3','ch4')
+    fread(path, header=FALSE, col.names=column_names)
+}
+
+```
+
+## load data
+
+```{r}
+setwd("/Users/taylormade/Documents/Labs Data Mining")
+S1_eo  <- read_eeg('./Subject1_eo.csv')
+S2_eo  <- read_eeg('./Subject2_eo.csv')
+S3_eo  <- read_eeg('./Subject3_eo.csv')
+S1_ec  <- read_eeg('./Subject1_ec.csv')
+S2_ec  <- read_eeg('./Subject2_ec.csv')
+S3_ec  <- read_eeg('./Subject3_ec.csv')
+S1_med <- read_eeg('./Subject1_med.csv')
+S2_med <- read_eeg('./Subject2_med.csv')
+S3_med <- read_eeg('./Subject3_med.csv')
+S1_vid <- read_eeg('./Subject1_vid.csv')
+S2_vid <- read_eeg('./Subject2_vid.csv')
+S3_vid <- read_eeg('./Subject3_vid.csv')
+```
+
+## Entropy calculation
+
+```{r}
+S1_eo_entropy  <- S1_eo %>% mutate(state='eyes-open') 
+S2_eo_entropy  <- S2_eo  %>% mutate(state='eyes-open')
+S3_eo_entropy  <- S3_eo  %>% mutate(state='eyes-open')  
+S1_ec_entropy  <- S1_ec  %>% mutate(state='eyes-closed') 
+S2_ec_entropy  <- S2_ec  %>% mutate(state='eyes-closed') 
+S3_ec_entropy  <- S3_ec  %>% mutate(state='eyes-closed')  
+S1_med_entropy <- S1_med %>% mutate(state='meditate')
+S2_med_entropy <- S2_med %>% mutate(state='meditate')     
+S3_med_entropy <- S3_med %>% mutate(state='meditate')      
+S1_vid_entropy <- S1_vid %>% mutate(state='video')         
+S2_vid_entropy <- S2_vid %>% mutate(state='video')         
+S3_vid_entropy <- S3_vid %>% mutate(state='video')
+```
+
+## Sample 75% of each dataset
+
+```{r}
+S1_ec_sample     <- boolean_cover(S1_ec_entropy) 
+S2_ec_sample     <- boolean_cover(S2_ec_entropy)
+S3_ec_sample     <- boolean_cover(S3_ec_entropy)
+S1_eo_sample     <- boolean_cover(S1_eo_entropy) 
+S2_eo_sample     <- boolean_cover(S2_eo_entropy)
+S3_eo_sample     <- boolean_cover(S3_eo_entropy)
+S1_med_sample    <- boolean_cover(S1_med_entropy) 
+S2_med_sample    <- boolean_cover(S2_med_entropy)
+S3_med_sample    <- boolean_cover(S3_med_entropy)
+S1_vid_sample    <- boolean_cover(S1_vid_entropy) 
+S2_vid_sample    <- boolean_cover(S2_vid_entropy)
+S3_vid_sample    <- boolean_cover(S3_vid_entropy)
+
+S1_ec_train <- S1_ec_entropy[S1_ec_sample,] 
+S2_ec_train <- S2_ec_entropy[S2_ec_sample,]
+S3_ec_train <- S3_ec_entropy[S3_ec_sample,]
+S1_eo_train <- S1_eo_entropy[S1_eo_sample,] 
+S2_eo_train <- S2_eo_entropy[S2_eo_sample,]
+S3_eo_train <- S3_eo_entropy[S3_eo_sample,]
+S1_med_train <- S1_med_entropy[S1_med_sample,] 
+S2_med_train <- S2_med_entropy[S2_med_sample,]
+S3_med_train <- S3_med_entropy[S3_med_sample,]
+S1_vid_train <- S1_vid_entropy[S1_vid_sample,] 
+S2_vid_train <- S2_vid_entropy[S2_vid_sample,]
+S3_vid_train <- S3_vid_entropy[S3_vid_sample,]
+
+S1_ec_test <- S1_ec_entropy[!S1_ec_sample,] 
+S2_ec_test <- S2_ec_entropy[!S2_ec_sample,]
+S3_ec_test <- S3_ec_entropy[!S3_ec_sample,]
+S1_eo_test <- S1_eo_entropy[!S1_eo_sample,] 
+S2_eo_test <- S2_eo_entropy[!S2_eo_sample,]
+S3_eo_test <- S3_eo_entropy[!S3_eo_sample,]
+S1_med_test <- S1_med_entropy[!S1_med_sample,] 
+S2_med_test <- S2_med_entropy[!S2_med_sample,]
+S3_med_test <- S3_med_entropy[!S3_med_sample,]
+S1_vid_test <- S1_vid_entropy[!S1_vid_sample,] 
+S2_vid_test <- S2_vid_entropy[!S2_vid_sample,]
+S3_vid_test <- S3_vid_entropy[!S3_vid_sample,]
+```
+
+## Create necessary datasets
+
+```{r}
+S1_train <- rbind(S1_ec_train, S1_eo_train, S1_med_train, S1_vid_train) %>% 
+  mutate(state=as.factor(state))
+S2_train <- rbind(S2_ec_train, S2_eo_train, S2_med_train, S2_vid_train) %>% 
+  mutate(state=as.factor(state))
+S3_train <- rbind(S3_ec_train, S3_eo_train, S3_med_train, S3_vid_train) %>% 
+  mutate(state=as.factor(state))
+S1S2_train <- rbind(S1_train, S2_train)
+S1S3_train <- rbind(S1_train, S3_train)
+S2S3_train <- rbind(S2_train, S3_train)
+S1S2S3_train <- rbind(S1_train, S2_train, S3_train)
+
+S1_test <- rbind(S1_ec_test, S1_eo_test, S1_med_test, S1_vid_test) %>% 
+  mutate(state=as.factor(state))
+S2_test <- rbind(S2_ec_test, S2_eo_test, S2_med_test, S2_vid_test) %>% 
+  mutate(state=as.factor(state))
+S3_test <- rbind(S3_ec_test, S3_eo_test, S3_med_test, S3_vid_test) %>% 
+  mutate(state=as.factor(state))
+S1S2_test <- rbind(S1_test, S2_test)
+S1S3_test <- rbind(S1_test, S3_test)
+S2S3_test <- rbind(S2_test, S3_test)
+S1S2S3_test <- rbind(S1_test, S2_test, S3_test)
+```
+
+## Naives Bayes, Decision Tree
+
+```{r}
+useNaiveBayes <- function(train, test){
+#given two datafames, use naiveBayes with the correct arguments to return a prediction for test$state
+    model <- naiveBayes( state~., data=train, laplace = 1)
+    predict( model, test )
+}
+
+S1_NaiveBayes <- useNaiveBayes(S1_train, S1_test)
+S2_NaiveBayes <- useNaiveBayes(S2_train, S2_test)     
+S3_NaiveBayes <- useNaiveBayes(S3_train, S3_test)     
+S1S2_NaiveBayes <- useNaiveBayes(S1S2_train, S1S2_test)
+S1S3_NaiveBayes <- useNaiveBayes(S1S3_train, S1S3_test)
+S2S3_NaiveBayes <- useNaiveBayes(S2S3_train, S2S3_test)
+S1S2S3_NaiveBayes <- useNaiveBayes(S1S2S3_train, S1S2S3_test)
+
+useTree <- function(train, test){
+#given two dataframes, use C5.0 with the correct arguments to return a prediction of test$state
+   model <- C5.0( state~., data=train, trials = 10 )
+   predict( model, test, type = 'class')
+}
+
+S1_Tree <- useTree(S1_train, S1_test)
+S2_Tree <- useTree(S2_train, S2_test)     
+S3_Tree <- useTree(S3_train, S3_test)     
+S1S2_Tree <- useTree(S1S2_train, S1S2_test)
+S1S3_Tree <- useTree(S1S3_train, S1S3_test)
+S2S3_Tree <- useTree(S2S3_train, S2S3_test)
+S1S2S3_Tree <- useTree(S1S2S3_train, S1S2S3_test)
+```
+
+## Crosstables
+
+```{r}
+#compare predicted to actual for every model used.
+CrossTable(S1_NaiveBayes,S1_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S2_NaiveBayes,S2_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S3_NaiveBayes,S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S1S2_NaiveBayes,S1S2_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S1S3_NaiveBayes,S1S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S2S3_NaiveBayes,S2S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S1S2S3_NaiveBayes,S1S2S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)
+
+CrossTable(S1_Tree,S1_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S2_Tree,S2_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S3_Tree,S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)     
+CrossTable(S1S2_Tree,S1S2_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S1S3_Tree,S1S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S2S3_Tree,S2S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)   
+CrossTable(S1S2S3_Tree,S1S2S3_test$state,prop.r = FALSE,prop.t = FALSE,prop.chisq = FALSE)
+```
+
+## Classification
+
+```{r}
+misclassification <- function(predicted, actual) {
+    #given two vectors, return the complement of accuracy
+    #accuracy is defined as TruePositives/All
+    accuracy <- mean(predicted==actual)
+    return(1-accuracy)
+}
+
+S1_NaiveBayes_mc <- misclassification(S1_NaiveBayes, S1_test$state)
+S2_NaiveBayes_mc <- misclassification(S2_NaiveBayes, S2_test$state)
+S3_NaiveBayes_mc <- misclassification(S3_NaiveBayes, S3_test$state)
+S1S2_NaiveBayes_mc <- misclassification(S1S2_NaiveBayes, S1S2_test$state)
+S1S3_NaiveBayes_mc <- misclassification(S1S3_NaiveBayes, S1S3_test$state)
+S2S3_NaiveBayes_mc <- misclassification(S2S3_NaiveBayes, S2S3_test$state)
+S1S2S3_NaiveBayes_mc <- misclassification(S1S2S3_NaiveBayes, S1S2S3_test$state)
+
+S1_Tree_mc <- misclassification(S1_Tree, S1_test$state)
+S2_Tree_mc <- misclassification(S2_Tree, S2_test$state)
+S3_Tree_mc <- misclassification(S3_Tree, S3_test$state)
+S1S2_Tree_mc <- misclassification(S1S2_Tree, S1S2_test$state)
+S1S3_Tree_mc <- misclassification(S1S3_Tree, S1S3_test$state)
+S2S3_Tree_mc <- misclassification(S2S3_Tree, S2S3_test$state)
+S1S2S3_Tree_mc <- misclassification(S1S2S3_Tree, S1S2S3_test$state)
+
+summary_data <- data.frame( nsubjects=c(1,1,1,2,2,2,3,1,1,1,2,2,2,3),
+                            algorithm=c(rep('naiveBayes',7), rep('decisionTree',7)),
+                            miscl_rate=c(S1_NaiveBayes_mc, S2_NaiveBayes_mc, S3_NaiveBayes_mc,
+                                         S1S2_NaiveBayes_mc, S1S3_NaiveBayes_mc, S2S3_NaiveBayes_mc,
+                                         S1S2S3_NaiveBayes_mc, S1_Tree_mc, S2_Tree_mc, S3_Tree_mc,
+                                        S1S2_Tree_mc, S1S3_Tree_mc, S2S3_Tree_mc, S1S2S3_Tree_mc)
+                            )
+
+ggplot(summary_data, aes( x = nsubjects, y = miscl_rate, color = algorithm )) +
+  geom_point() +
+  geom_smooth()
+
+```
+
